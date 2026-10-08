@@ -6,6 +6,7 @@
 
 #if defined(__APPLE__)
 
+#include "darwin-capture-error.h"
 #include "types.h"
 
 #include <chrono>
@@ -53,14 +54,16 @@ namespace librealsense
             {
                 auto status = libusb_open(device, &_handle);
                 if(status != LIBUSB_SUCCESS)
-                    throw std::runtime_error("failed to open USB device for Darwin capture");
+                    throw std::runtime_error(detail::format_darwin_capture_error(
+                        "libusb_open", status, _interface_number));
 
                 status = libusb_set_auto_detach_kernel_driver(_handle, false);
                 if(status != LIBUSB_SUCCESS)
                 {
                     libusb_close(_handle);
                     _handle = nullptr;
-                    throw std::runtime_error("failed to disable automatic Darwin USB release");
+                    throw std::runtime_error(detail::format_darwin_capture_error(
+                        "libusb_set_auto_detach_kernel_driver(false)", status, _interface_number));
                 }
 
                 status = libusb_detach_kernel_driver(_handle, _interface_number);
@@ -76,7 +79,8 @@ namespace librealsense
                 {
                     libusb_close(_handle);
                     _handle = nullptr;
-                    throw std::runtime_error("failed to capture USB device on Darwin");
+                    throw std::runtime_error(detail::format_darwin_capture_error(
+                        "libusb_detach_kernel_driver", status, _interface_number));
                 }
             }
 

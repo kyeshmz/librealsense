@@ -20,6 +20,8 @@ The bundle option defaults to off. To explicitly build the ordinary Viewer execu
 ```bash
 cmake -S . -B build-viewer-cli \
   -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_C_COMPILER=/usr/bin/clang \
+  -DCMAKE_CXX_COMPILER=/usr/bin/clang++ \
   -DCMAKE_PREFIX_PATH="$(brew --prefix)" \
   -DFORCE_RSUSB_BACKEND=ON \
   -DBUILD_EXAMPLES=ON \
@@ -30,7 +32,7 @@ cmake -S . -B build-viewer-cli \
   -DCHECK_FOR_UPDATES=OFF \
   -DENABLE_AI_ASSISTANT=OFF \
   -DENABLE_STATS=OFF
-cmake --build build-viewer-cli --target realsense-viewer --parallel
+cmake --build build-viewer-cli --target realsense-viewer rs-enumerate-devices --parallel
 ./build-viewer-cli/Release/realsense-viewer --version
 ```
 
@@ -41,6 +43,8 @@ Set `BUILD_MACOS_VIEWER_BUNDLE=ON` to build the relocatable `realsense-viewer.ap
 ```bash
 cmake -S . -B build-viewer-app \
   -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_C_COMPILER=/usr/bin/clang \
+  -DCMAKE_CXX_COMPILER=/usr/bin/clang++ \
   -DCMAKE_PREFIX_PATH="$(brew --prefix)" \
   -DFORCE_RSUSB_BACKEND=ON \
   -DBUILD_EXAMPLES=ON \
@@ -60,6 +64,8 @@ The bundle includes preset files under `Contents/Resources/Presets`. The Viewer 
 
 Installation copies non-system dependencies into `Contents/Frameworks`, rewrites their loader paths, and applies local ad-hoc signatures after rewriting. These signatures allow modified Mach-O files to execute, particularly on Apple Silicon; they do not provide a trusted distribution identity, notarization, or USB privileges. CMake 3.10 remains the project baseline; the commands above use newer CLI conveniences (`-S`/`-B`, `--parallel`, and `--install`). Use a current CMake for these commands.
 
+CMake caches the compiler selected when a build directory is first configured. If changing compilers, configure a fresh build directory rather than reusing one with a different compiler.
+
 The package workflow builds native `arm64` and `x86_64` artifacts separately. It checks dependency closure after relocating the app to a path containing spaces and runs the bundled executable with `--version`. This is a loader/CLI smoke test only; it does not test Finder launch, GUI rendering, playback, device discovery, or USB streaming. The workflow does not build a `universal2` app.
 
 ## macOS Viewer prereleases
@@ -71,6 +77,20 @@ The `kyeshmz/librealsense` fork publishes architecture-specific app ZIPs from ne
 The macOS Viewer uses Apple's OpenGL 2.1 compatibility context, GLSL 1.20, and fixed-function rendering paths. It does not use the newer shader-accelerated processing path; rendering features and performance can differ from supported Windows and Linux configurations.
 
 This implementation includes a focused RSUSB HID motion path for D500 devices. This is not a claim of full motion-feature parity or completed hardware qualification; device models, stream combinations, and profile changes should be treated as unqualified until tested on the target Mac.
+
+## USB visibility and capture troubleshooting
+
+Run these checks in Terminal in the active logged-in desktop session. First check whether macOS sees the camera with `system_profiler SPUSBDataType`. Then run `./build-viewer-cli/Release/rs-enumerate-devices --debug` from the same checkout and build directory used for the Viewer. OS USB visibility confirms only that the device is visible to macOS; SDK enumeration also requires successful USB device construction and capture. Save the exact libusb error if SDK enumeration fails.
+
+If the error is `LIBUSB_ERROR_ACCESS`, a human can retry that same enumeration command from the active desktop Terminal with local authorization, for example `sudo ./build-viewer-cli/Release/rs-enumerate-devices --debug`, and enter any password locally without sharing it. This is a diagnostic, not a guarantee: elevated capture can still be restricted and `sudo` may not resolve every restriction.
+
+After successful authorized enumeration, a human doing local development may launch the matching Viewer executable directly from that active desktop Terminal:
+
+```bash
+sudo ./build-viewer-cli/Release/realsense-viewer
+```
+
+This direct launch is not guaranteed: on some systems the root process may not connect to the user's WindowServer and the GUI may fail. Do not use `sudo open` to launch the GUI. If the D405 appears but no live stream is shown, enable the Stereo Module stream in the Viewer; it was off in the confirmed session. Successful SDK enumeration does not prove Viewer detection or frame delivery; verify those separately with the Viewer and a live streaming test.
 
 USB capture through libusb may require elevated privileges in an active logged-in desktop session. Running an unsigned development build with `sudo` can help access a device, but on some systems a root process cannot connect to the user's WindowServer, so the GUI may fail to open. Running normally may open the Viewer without granting camera access. A camera privacy prompt, an app bundle, local ad-hoc signing, or an entitlement does not grant privileged libusb access. Do not disable SIP or AMFI, or add restricted device-access entitlements, as a workaround. Normal-user USB support and Finder launch with live cameras remain unqualified.
 

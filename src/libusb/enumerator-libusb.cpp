@@ -120,9 +120,10 @@ namespace librealsense
                     {
                         return std::make_shared<usb_device_libusb>(device, desc, info, ctx);
                     }
-                    catch (std::exception e)
+                    catch (const std::exception& e)
                     {
-                        LOG_WARNING("failed to create usb device at index: %d" << idx);
+                        LOG_WARNING("failed to create usb device at index: "
+                            << static_cast<unsigned>(idx) << ": " << e.what());
                     }
                 }
                 else
