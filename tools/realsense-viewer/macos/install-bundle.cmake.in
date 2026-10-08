@@ -1,0 +1,76 @@
+# License: Apache 2.0. See LICENSE file in root directory.
+# Copyright(c) 2026 RealSense, Inc. All Rights Reserved.
+
+set(_viewer_bundle "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/realsense-viewer.app")
+set(_viewer_executable "${_viewer_bundle}/Contents/MacOS/realsense-viewer")
+if(NOT EXISTS "${_viewer_executable}")
+    message(FATAL_ERROR "The installed RealSense Viewer bundle is missing ${_viewer_executable}")
+endif()
+
+file(MAKE_DIRECTORY "${_viewer_bundle}/Contents/Frameworks")
+set(_viewer_search_dirs
+    "$<TARGET_FILE_DIR:realsense2>"
+    "$<TARGET_FILE_DIR:realsense2-gl>"
+    "@CMAKE_BINARY_DIR@"
+    "@CMAKE_CURRENT_BINARY_DIR@"
+    "@CMAKE_BINARY_DIR@/src/gl"
+    "${CMAKE_INSTALL_PREFIX}/@CMAKE_INSTALL_LIBDIR@"
+    "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/@CMAKE_INSTALL_LIBDIR@")
+list(REMOVE_DUPLICATES _viewer_search_dirs)
+
+include(BundleUtilities)
+# CMake 3.10 otherwise embeds dylibs in Contents/MacOS. Keep the layout
+# consistent across supported CMake versions, including extensionless dylibs.
+function(gp_item_default_embedded_path_override item path_var)
+    set(${path_var} "@executable_path/../Frameworks" PARENT_SCOPE)
+endfunction()
+set(BU_COPY_FULL_FRAMEWORK_CONTENTS TRUE)
+set(BU_CHMOD_BUNDLE_ITEMS TRUE)
+# BundleUtilities rewrites loads to @executable_path and deletes LC_RPATH
+# entries (including build/Homebrew paths) after resolving the closure.
+fixup_bundle("${_viewer_executable}" "" "${_viewer_search_dirs}")
+
+# install_name_tool invalidates existing signatures, including Homebrew's
+# arm64 signatures. Re-sign only the installed copies, without entitlements
+# or a hardened-runtime/distribution identity. This does not grant USB access.
+find_program(_viewer_codesign codesign)
+find_program(_viewer_file file)
+if(NOT _viewer_codesign OR NOT _viewer_file)
+    message(FATAL_ERROR "macOS Viewer packaging requires codesign and file")
+endif()
+function(_viewer_sign path)
+    execute_process(COMMAND "${_viewer_codesign}" --force --sign - --timestamp=none "${path}"
+        RESULT_VARIABLE _result ERROR_VARIABLE _error)
+    if(NOT _result EQUAL 0)
+        message(FATAL_ERROR "Ad-hoc signing failed for ${path}: ${_error}")
+    endif()
+endfunction()
+file(GLOB_RECURSE _viewer_files "${_viewer_bundle}/Contents/*")
+set(_viewer_frameworks)
+foreach(_file ${_viewer_files})
+    if(NOT IS_SYMLINK "${_file}")
+        execute_process(COMMAND "${_viewer_file}" -b "${_file}"
+            RESULT_VARIABLE _result OUTPUT_VARIABLE _type ERROR_VARIABLE _error)
+        if(NOT _result EQUAL 0)
+            message(FATAL_ERROR "Cannot inspect ${_file} before signing: ${_error}")
+        endif()
+        if(_type MATCHES "Mach-O")
+            _viewer_sign("${_file}")
+            if(_file MATCHES "^(.+\\.framework)/")
+                list(APPEND _viewer_frameworks "${CMAKE_MATCH_1}")
+            endif()
+        endif()
+    endif()
+endforeach()
+list(REMOVE_DUPLICATES _viewer_frameworks)
+list(SORT _viewer_frameworks)
+list(REVERSE _viewer_frameworks)
+foreach(_framework ${_viewer_frameworks})
+    _viewer_sign("${_framework}")
+endforeach()
+_viewer_sign("${_viewer_bundle}")
+execute_process(COMMAND "${_viewer_codesign}" --verify --deep --strict "${_viewer_bundle}"
+    RESULT_VARIABLE _result ERROR_VARIABLE _error)
+if(NOT _result EQUAL 0)
+    message(FATAL_ERROR "Ad-hoc signature verification failed: ${_error}")
+endif()

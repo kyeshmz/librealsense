@@ -34,6 +34,7 @@ option(BUILD_UNIT_TESTS "Build LibCI unit tests. If enabled, additional test dat
 option(BUILD_VIEWER_TESTS "Build automated GUI tests for realsense-viewer, will use FetchContent for the test engine files" OFF)
 option(BUILD_EXAMPLES "Build examples (not including graphical examples -- see BUILD_GRAPHICAL_EXAMPLES)" ON)
 option(BUILD_GRAPHICAL_EXAMPLES "Build graphical examples (Viewer & DQT) -- Implies BUILD_GLSL_EXTENSIONS" ON)
+option(BUILD_MACOS_VIEWER_BUNDLE "Build and install the macOS RealSense Viewer app bundle" OFF)
 option(BUILD_CV_EXAMPLES "Build OpenCV examples" OFF)
 option(BUILD_DLIB_EXAMPLES "Build DLIB examples - requires DLIB_DIR" OFF)
 option(BUILD_PCL_EXAMPLES "Build PCL examples" OFF)
@@ -87,4 +88,17 @@ option(USE_EXTERNAL_NLOHMANN_JSON "Use an externally built nlohmann-json develop
 option(BUILD_ASAN "Enable AddressSanitizer" OFF)
 option(BUILD_ROSBAG2 "Build and use rosbag2 recording system" ON) # temporary flag, should be removed when deprecated ROSBAG1 recording system is removed
 option(ENABLE_STATS "Enable RUM (Real User Monitoring) usage-statistics collection" ON)
+
+if(BUILD_MACOS_VIEWER_BUNDLE)
+    if(NOT APPLE)
+        message(FATAL_ERROR "BUILD_MACOS_VIEWER_BUNDLE is only supported on macOS")
+    endif()
+    if(NOT BUILD_EXAMPLES OR NOT BUILD_GRAPHICAL_EXAMPLES)
+        message(FATAL_ERROR "BUILD_MACOS_VIEWER_BUNDLE requires BUILD_EXAMPLES=ON and BUILD_GRAPHICAL_EXAMPLES=ON")
+    endif()
+    if(NOT BUILD_GLSL_EXTENSIONS)
+        message(FATAL_ERROR "BUILD_MACOS_VIEWER_BUNDLE requires BUILD_GLSL_EXTENSIONS=ON")
+    endif()
+endif()
+
 mark_as_advanced(BUILD_ASAN)

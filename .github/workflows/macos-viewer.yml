@@ -1,0 +1,113 @@
+# License: Apache 2.0. See LICENSE file in root directory.
+# Copyright(c) 2026 RealSense, Inc. All Rights Reserved.
+
+name: macOS Viewer Package
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: ['**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: macOS Viewer (${{ matrix.architecture }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: arm64
+            runner: macos-15
+          - architecture: x86_64
+            runner: macos-15-intel
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd #v6.0.2
+
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          brew install glfw libusb
+          echo "HOMEBREW_PREFIX=$(brew --prefix)" >> "$GITHUB_ENV"
+
+      - name: Run portable source and bundle tests
+        run: python3 -m unittest discover -s scripts/tests -p 'test_*.py' -v
+
+      - name: Configure and build app bundle
+        shell: bash
+        run: |
+          cmake -S . -B "$RUNNER_TEMP/build-bundle" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=${{ matrix.architecture }} \
+            -DCMAKE_PREFIX_PATH="$HOMEBREW_PREFIX" \
+            -DFORCE_RSUSB_BACKEND=ON \
+            -DBUILD_EXAMPLES=ON \
+            -DBUILD_GRAPHICAL_EXAMPLES=ON \
+            -DBUILD_GLSL_EXTENSIONS=ON \
+            -DBUILD_MACOS_VIEWER_BUNDLE=ON \
+            -DBUILD_WITH_DDS=OFF \
+            -DCHECK_FOR_UPDATES=OFF \
+            -DENABLE_AI_ASSISTANT=OFF \
+            -DENABLE_STATS=OFF
+          cmake --build "$RUNNER_TEMP/build-bundle" --config Release --target realsense-viewer --parallel 3
+
+      - name: Configure and build ordinary CLI Viewer (bundle option OFF)
+        shell: bash
+        run: |
+          cmake -S . -B "$RUNNER_TEMP/build-cli" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=${{ matrix.architecture }} \
+            -DCMAKE_PREFIX_PATH="$HOMEBREW_PREFIX" \
+            -DFORCE_RSUSB_BACKEND=ON \
+            -DBUILD_EXAMPLES=ON \
+            -DBUILD_GRAPHICAL_EXAMPLES=ON \
+            -DBUILD_GLSL_EXTENSIONS=ON \
+            -DBUILD_MACOS_VIEWER_BUNDLE=OFF \
+            -DBUILD_WITH_DDS=OFF \
+            -DCHECK_FOR_UPDATES=OFF \
+            -DENABLE_AI_ASSISTANT=OFF \
+            -DENABLE_STATS=OFF
+          cmake --build "$RUNNER_TEMP/build-cli" --config Release --target realsense-viewer --parallel 3
+          "$RUNNER_TEMP/build-cli/Release/realsense-viewer" --version
+
+      - name: Install and relocate app bundle
+        id: package
+        shell: bash
+        run: |
+          prefix="$RUNNER_TEMP/Viewer install prefix"
+          destination="$RUNNER_TEMP/relocated Viewer"
+          cmake --install "$RUNNER_TEMP/build-bundle" --prefix "$prefix" --component macos-viewer
+          mkdir -p "$destination"
+          ditto "$prefix/realsense-viewer.app" "$destination/realsense-viewer.app"
+          echo "app=$destination/realsense-viewer.app" >> "$GITHUB_OUTPUT"
+
+      - name: Check relocated dependencies and smoke-run CLI (not GUI or USB qualification)
+        shell: bash
+        run: |
+          while IFS='=' read -r name _; do
+            case "$name" in DYLD_*) unset "$name" ;; esac
+          done < <(env)
+          python3 scripts/check-macos-viewer-bundle.py "${{ steps.package.outputs.app }}"
+          codesign --verify --deep --strict "${{ steps.package.outputs.app }}"
+          "${{ steps.package.outputs.app }}/Contents/MacOS/realsense-viewer" --version
+
+      - name: Archive app bundle
+        shell: bash
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent \
+            "${{ steps.package.outputs.app }}" \
+            "$RUNNER_TEMP/realsense-viewer-${{ matrix.architecture }}.zip"
+
+      - name: Upload CI package artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a #v7.0.1
+        with:
+          name: realsense-viewer-macos-${{ matrix.architecture }}
+          path: ${{ runner.temp }}/realsense-viewer-${{ matrix.architecture }}.zip
+          if-no-files-found: error
+          retention-days: 7

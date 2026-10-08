@@ -238,6 +238,16 @@ if(APPLE)
         INSTALL_RPATH "@loader_path;@loader_path/../lib"
         INSTALL_RPATH_USE_LINK_PATH FALSE
         MACOSX_RPATH ON)
+
+    if(BUILD_MACOS_VIEWER_BUNDLE)
+        set_target_properties(${PROJECT_NAME} PROPERTIES
+            MACOSX_BUNDLE TRUE
+            MACOSX_BUNDLE_BUNDLE_NAME "RealSense Viewer"
+            MACOSX_BUNDLE_GUI_IDENTIFIER "com.intel.realsense.viewer"
+            MACOSX_BUNDLE_BUNDLE_VERSION "${REALSENSE_VERSION_STRING}"
+            MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/macos/Info.plist.in"
+            INSTALL_RPATH "@executable_path/../Frameworks;@loader_path/../Frameworks")
+    endif()
 endif()
 
 if(OPENVINO2019)
@@ -261,15 +271,40 @@ include_directories(
     )
 
 
-install(
-    TARGETS ${PROJECT_NAME}
-    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-)
-#https://cmake.org/cmake/help/latest/command/install.html
-install(DIRECTORY presets/
-    DESTINATION $ENV{HOME}/Documents/librealsense2/presets
-    FILES_MATCHING PATTERN "*.preset"
-)
+if(BUILD_MACOS_VIEWER_BUNDLE)
+    install(TARGETS ${PROJECT_NAME}
+        BUNDLE DESTINATION "."
+        COMPONENT macos-viewer)
+    install(FILES
+        "${REPO_ROOT}/LICENSE"
+        "${REPO_ROOT}/NOTICE.md"
+        DESTINATION "${PROJECT_NAME}.app/Contents/Resources"
+        COMPONENT macos-viewer)
+    install(DIRECTORY presets/
+        DESTINATION "${PROJECT_NAME}.app/Contents/Resources/Presets"
+        COMPONENT macos-viewer
+        FILES_MATCHING PATTERN "*.preset")
+
+    set(_viewer_bundle_install_script "${CMAKE_CURRENT_BINARY_DIR}/install-macos-viewer-bundle.cmake")
+    configure_file(macos/install-bundle.cmake.in "${_viewer_bundle_install_script}" @ONLY)
+    file(GENERATE
+        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/install-macos-viewer-bundle-$<CONFIG>.cmake"
+        INPUT "${_viewer_bundle_install_script}")
+    # install(SCRIPT) does not evaluate generator expressions in CMake 3.10.
+    # Select the generated script at install time instead.
+    install(CODE "include(\"${CMAKE_CURRENT_BINARY_DIR}/install-macos-viewer-bundle-\${CMAKE_INSTALL_CONFIG_NAME}.cmake\")"
+        COMPONENT macos-viewer)
+else()
+    install(
+        TARGETS ${PROJECT_NAME}
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    )
+    #https://cmake.org/cmake/help/latest/command/install.html
+    install(DIRECTORY presets/
+        DESTINATION $ENV{HOME}/Documents/librealsense2/presets
+        FILES_MATCHING PATTERN "*.preset"
+    )
+endif()
 
 if(BUILD_VIEWER_TESTS)
     include(tests/viewer_tests.cmake)
