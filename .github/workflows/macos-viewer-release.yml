@@ -1,0 +1,190 @@
+# License: Apache 2.0. See LICENSE file in root directory.
+# Copyright(c) 2026 RealSense, Inc. All Rights Reserved.
+
+name: macOS Viewer Prerelease
+
+on:
+  push:
+    tags: ['macos-viewer-v*']
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Build and validate native macOS packages
+    uses: ./.github/workflows/macos-viewer.yml
+    permissions:
+      contents: read
+
+  publish:
+    name: Publish fork prerelease
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Verify fork and triggering source
+        shell: bash
+        env:
+          SOURCE_TAG: ${{ github.ref_name }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "kyeshmz/librealsense"
+          [[ "$GITHUB_REF" == "refs/tags/$SOURCE_TAG" ]]
+          [[ "$SOURCE_TAG" == macos-viewer-v* ]]
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Download arm64 package from this workflow run
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: realsense-viewer-macos-arm64
+          path: ${{ runner.temp }}/release-assets
+
+      - name: Download x86_64 package from this workflow run
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: realsense-viewer-macos-x86_64
+          path: ${{ runner.temp }}/release-assets
+
+      - name: Inspect archives and prepare provenance/checksums
+        shell: bash
+        env:
+          SOURCE_TAG: ${{ github.ref_name }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          release_dir="$RUNNER_TEMP/release-assets"
+          python3 - "$release_dir" <<'PY'
+          import pathlib
+          import plistlib
+          import posixpath
+          import stat
+          import struct
+          import sys
+          import zipfile
+
+          release_dir = pathlib.Path(sys.argv[1])
+          expected_architectures = {"arm64": 0x0100000C, "x86_64": 0x01000007}
+          app = "realsense-viewer.app"
+
+          def executable_architectures(data):
+              if len(data) < 8:
+                  raise SystemExit("Viewer executable is truncated")
+              magic = data[:4]
+              if magic in (b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf"):
+                  endian = "<" if magic == b"\xcf\xfa\xed\xfe" else ">"
+                  cpu = struct.unpack(endian + "i", data[4:8])[0]
+                  return {cpu}
+              if magic in (b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca"):
+                  endian = ">" if magic == b"\xca\xfe\xba\xbe" else "<"
+                  if len(data) < 8:
+                      raise SystemExit("Universal Viewer executable is truncated")
+                  count = struct.unpack(endian + "I", data[4:8])[0]
+                  if count == 0 or count > 32 or len(data) < 8 + 20 * count:
+                      raise SystemExit("Universal Viewer architecture table is invalid")
+                  return {struct.unpack_from(endian + "i", data, 8 + 20 * i)[0] for i in range(count)}
+              raise SystemExit("Viewer executable is not a supported 64-bit Mach-O file")
+
+          for architecture, cpu_type in expected_architectures.items():
+              archive = release_dir / ("realsense-viewer-" + architecture + ".zip")
+              if not archive.is_file():
+                  raise SystemExit("missing expected package: " + str(archive))
+              with zipfile.ZipFile(archive) as bundle_zip:
+                  if bundle_zip.testzip() is not None:
+                      raise SystemExit(archive.name + " failed ZIP CRC validation")
+                  entries = bundle_zip.infolist()
+                  names = [entry.filename for entry in entries]
+                  if len(names) != len(set(names)):
+                      raise SystemExit(archive.name + " contains duplicate ZIP paths")
+                  for entry in entries:
+                      path = pathlib.PurePosixPath(entry.filename)
+                      if path.is_absolute() or ".." in path.parts or "\\" in entry.filename:
+                          raise SystemExit(archive.name + " contains an unsafe path: " + entry.filename)
+                      mode = entry.external_attr >> 16
+                      if stat.S_ISLNK(mode):
+                          target = bundle_zip.read(entry).decode("utf-8")
+                          resolved = posixpath.normpath(posixpath.join(posixpath.dirname(entry.filename), target))
+                          if target.startswith("/") or resolved == ".." or resolved.startswith("../"):
+                              raise SystemExit(archive.name + " contains an escaping symlink: " + entry.filename)
+
+                  prefix = app + "/Contents/"
+                  required = {
+                      prefix + "Info.plist",
+                      prefix + "MacOS/realsense-viewer",
+                      prefix + "Resources/LICENSE",
+                      prefix + "Resources/NOTICE.md",
+                  }
+                  missing = sorted(required.difference(names))
+                  if missing:
+                      raise SystemExit(archive.name + " is missing bundle paths: " + ", ".join(missing))
+                  if not any(name.startswith(prefix + "Frameworks/") and not name.endswith("/") for name in names):
+                      raise SystemExit(archive.name + " has no bundled Frameworks files")
+                  if not any(name.startswith(prefix + "Resources/Presets/") and name.endswith(".preset") for name in names):
+                      raise SystemExit(archive.name + " has no packaged Viewer presets")
+
+                  plist = plistlib.loads(bundle_zip.read(prefix + "Info.plist"))
+                  expected_metadata = {
+                      "CFBundleExecutable": "realsense-viewer",
+                      "CFBundleIdentifier": "com.intel.realsense.viewer",
+                      "CFBundleDisplayName": "RealSense Viewer",
+                      "CFBundleName": "RealSense Viewer",
+                      "CFBundlePackageType": "APPL",
+                  }
+                  if any(plist.get(key) != value for key, value in expected_metadata.items()):
+                      raise SystemExit(archive.name + " has invalid app metadata")
+                  version = plist.get("CFBundleShortVersionString")
+                  parts = version.split(".") if isinstance(version, str) else []
+                  if len(parts) != 3 or any(not part.isdigit() for part in parts) or plist.get("CFBundleVersion") != version:
+                      raise SystemExit(archive.name + " has invalid app version metadata")
+                  executable_name = prefix + "MacOS/realsense-viewer"
+                  executable_entry = bundle_zip.getinfo(executable_name)
+                  executable_mode = executable_entry.external_attr >> 16
+                  if not stat.S_ISREG(executable_mode) or not executable_mode & 0o111:
+                      raise SystemExit(archive.name + " Viewer executable is not a regular executable file")
+                  if executable_architectures(bundle_zip.read(executable_entry)) != {cpu_type}:
+                      raise SystemExit(archive.name + " Viewer executable has the wrong Mach-O architecture")
+              print("validated {} bundle archive ({})".format(archive.name, architecture))
+          PY
+
+          cd "$release_dir"
+          printf 'repository=%s\ntag=%s\ncommit=%s\n' \
+            "$GITHUB_REPOSITORY" "$SOURCE_TAG" "$SOURCE_SHA" > SOURCE.txt
+          shasum -a 256 realsense-viewer-arm64.zip realsense-viewer-x86_64.zip > SHA256SUMS
+          shasum -a 256 -c SHA256SUMS
+
+      - name: Create labeled macOS Viewer prerelease
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: kyeshmz/librealsense
+          SOURCE_TAG: ${{ github.ref_name }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/release-notes.md"
+          cat > "$notes" <<EOF
+          macOS RealSense Viewer architecture-specific prerelease built from source commit \`$SOURCE_SHA\`.
+
+          This package is locally ad-hoc signed only. It is not developer-signed, notarized, or qualified for Gatekeeper distribution. Package CI checks dependency closure and a command-line \`--version\` smoke run; it does not qualify Finder GUI rendering, recording playback, camera discovery, or USB streaming.
+
+          USB access through libusb may require elevated privileges in an active desktop session. Running with \`sudo\` can prevent access to the logged-in user's WindowServer. An app bundle, camera privacy prompt, or ad-hoc signature does not grant USB privileges. Do not disable SIP/AMFI or add restricted entitlements.
+
+          See the source tree's \`doc/installation_osx.md\` for build and support limits. See \`SOURCE.txt\` and \`SHA256SUMS\` for provenance and asset verification.
+          EOF
+          gh release create "$SOURCE_TAG" \
+            "$RUNNER_TEMP/release-assets/realsense-viewer-arm64.zip" \
+            "$RUNNER_TEMP/release-assets/realsense-viewer-x86_64.zip" \
+            "$RUNNER_TEMP/release-assets/SHA256SUMS" \
+            "$RUNNER_TEMP/release-assets/SOURCE.txt" \
+            --verify-tag \
+            --prerelease \
+            --latest=false \
+            --title "RealSense Viewer ${SOURCE_TAG#macos-viewer-v}" \
+            --notes-file "$notes"

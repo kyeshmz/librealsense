@@ -9,6 +9,7 @@ on:
   pull_request:
     branches: ['**']
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -95,6 +96,8 @@ jobs:
           done < <(env)
           python3 scripts/check-macos-viewer-bundle.py "${{ steps.package.outputs.app }}"
           codesign --verify --deep --strict "${{ steps.package.outputs.app }}"
+          architecture="$(lipo -archs "${{ steps.package.outputs.app }}/Contents/MacOS/realsense-viewer")"
+          test "$architecture" = "${{ matrix.architecture }}"
           "${{ steps.package.outputs.app }}/Contents/MacOS/realsense-viewer" --version
 
       - name: Archive app bundle

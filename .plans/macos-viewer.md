@@ -15,7 +15,7 @@ Implementation branch: `macos-viewer`, based on upstream `development` at `1398e
 - Declare every new build option with `option()` in `CMake/lrs_options.cmake`. Preserve the project's CMake 3.10 baseline unless an existing feature already requires a newer version.
 - Guard macOS-only changes. Preserve non-macOS behavior and the default non-bundle viewer build.
 - New source files need the Apache 2.0 header and 2026 RealSense copyright, using the language's comment syntax.
-- Phases 1–4 must not commit or push. Phase 5 is explicitly authorized to create/reuse the authenticated user's fork, commit all task files, and push only this task branch to that fork. Do not publish PRs, change GitHub labels, or merge upstream PRs. Never revert other workers' edits or force-push.
+- Phases 1–4 must not commit or push. Phases 5–6 are explicitly authorized to commit/push task changes to the authenticated user's fork. Phase 6 may additionally push a new task release tag, run Actions, and publish a macOS Viewer prerelease there. Do not publish PRs, change GitHub labels, or merge upstream PRs. Never revert other workers' edits or force-push.
 - Use the named worktree. Own only the files listed for your phase. The planner owns this plan except your phase's automated checkboxes and appended execution-log entries.
 - A macOS app bundle, ad-hoc signing, and camera privacy metadata do not grant privileged USB capture. Do not disable SIP/AMFI or add restricted device-access entitlements.
 - Report tests actually executed separately from macOS CI and live hardware checks that remain pending. Human-only manual checkboxes stay unchecked.
@@ -242,6 +242,40 @@ Requirements:
 #### Manual verification
 - [ ] Native macOS CI, GUI, playback, and live USB qualification; these remain separate from publishing.
 
+## Phase 6 — Build and publish a macOS Viewer app through Actions
+
+Create and run a GitHub Actions release workflow on the user's fork, and verify that its prerelease assets contain built macOS Viewer applications.
+
+User explicitly requested a `luna#max` agent to create a macOS Viewer release using GitHub Actions, run it, and ensure it creates an app. As of dispatch, local and remote `fork/macos-viewer` both equal `09953d50efe34b447f3d2377f4f24a0e0a47697e`; the working tree is clean and tracks the fork. The original package workflow run `37849451385` is in progress: https://github.com/kyeshmz/librealsense/actions/runs/37849451385 . Earlier CLI authentication blockers may have been resolved externally; verify current capabilities instead of assuming they persist.
+
+Files owned:
+- [MODIFY] `.github/workflows/macos-viewer.yml`
+- [NEW] `.github/workflows/macos-viewer-release.yml`
+- [NEW] `scripts/tests/test_macos_viewer_release.py`
+- [MODIFY] `doc/installation_osx.md`
+- The previously reviewed task implementation files listed in Phase 5 may be revised only to fix actual native build/package failures discovered by Actions, with regression coverage. Do not expand transport, privilege, or renderer scope. Ask the planner before editing another source path.
+
+Requirements:
+1. Preserve existing push/PR/package CI and reuse its actual native arm64/x86_64 `.app` build and relocated dependency/signature/CLI checks, preferably through `workflow_call` rather than duplicating build recipes. Query current GitHub/CMake documentation before library/CLI/API syntax changes. Preserve immutable pinned Action references.
+2. Add a release workflow triggered by a new `macos-viewer-v*` tag (manual dispatch optional). Operate solely on `kyeshmz/librealsense`; keep minimal read permissions for builds and grant contents write only to the publishing job. Download only the current successful run's exact artifacts, require both architectures, and fail if archive/metadata/checksum expectations are unmet. Publish only after native build/package validation succeeds.
+3. Publish an explicitly labeled prerelease, not a stable/notarized release: default new tag `macos-viewer-v2.59.0-preview.1` if unused, otherwise select a fresh preview suffix. Never move/replace an existing tag or overwrite unrelated releases/assets. Attach two architecture-specific ZIPs containing `realsense-viewer.app`, plus SHA256 checksums and source-commit identification. No developer identity or notarization credentials are available; retain accurate local ad-hoc-signing and USB limitations in release notes.
+4. Commit workflow/docs/tests and any justified native fixes, push the fork task branch, push only a new task release tag, and actually run the release workflow. Verify the triggering SHA equals the intended reviewed source commit. Use safe existing credentials; no token printing, credential-file dumps, global config changes, or upstream writes. If CLI is absent it may be bootstrapped under `/tmp/opencode` using an official verified release, not a system install. GitHub MCP and existing authenticated environment mechanisms are permitted; do not substitute an incomplete master-based tree for the current development-based source.
+5. Monitor the specific remote workflow to completion, inspect failing logs if necessary, and fix justified native build/package issues within owned files. Use a fresh tag for substantive new release attempts. Do not mark success merely from workflow creation or dispatch. Respect authentication, runner/billing, or tool-runtime blockers and report exact evidence instead of fabricating output.
+6. Download released assets to `/tmp/opencode`, verify their published checksums, and inspect each ZIP's real app layout: readable Info.plist/executable metadata, executable Mach-O with correct architecture, Frameworks dependencies, packaged resources, and no escaping paths. Report release URL, successful Actions run URL, source SHA/tag, architecture asset URLs and inspection evidence. A native loader/CLI smoke pass is not GUI or camera streaming qualification.
+7. Keep a complete local/fork history and a clean working tree after final push. Record portable/native checks and release outcome separately; human-only GUI/USB checkboxes remain unchecked.
+
+#### Automated verification
+- [x] `env MACOS_VIEWER_TEST_CMAKE=/tmp/opencode/toolchain/cmake-3.31.10-linux-x86_64/bin/cmake MACOS_VIEWER_TEST_NINJA=/tmp/opencode/toolchain/ninja/usr/bin/ninja MACOS_VIEWER_TEST_CC=/tmp/opencode/toolchain/zig-cc TMPDIR=/tmp/opencode python3 -m unittest discover -s scripts/tests -p 'test_*.py' -v`
+- [x] `python3 -m py_compile scripts/check-macos-viewer-bundle.py scripts/tests/test_macos_viewer_release.py`
+- [x] `git diff --check`
+- [x] `git diff --cached --check`
+- [ ] Specific fork release Actions run completes successfully with both native architecture checks.
+- [ ] Released ZIP downloads match published checksums and contain inspected architecture-correct app bundles.
+
+#### Manual verification
+- [ ] Human GUI/playback and live-camera USB-motion qualification on target Macs.
+- [ ] Developer-signing/notarization/Gatekeeper qualification (not included in this prerelease).
+
 ## Follow-up milestones (not implemented in this task)
 
 1. DDS/Ethernet: rebase #15551 on current development; investigate whether current dependency versions still need static/shared and SO_REUSEPORT workarounds, then separately audit lock-file security, idempotent patch application, C++14 ownership callbacks, install closure and concurrent discovery. Validate D555 depth/color/combined motion, MTU/interface selection, two simultaneous clients, clean rediscovery. Bring #15552 only if example behavior is in scope; #15547 only for Python orientation parity.
@@ -252,9 +286,9 @@ Requirements:
 ## Out of scope
 
 - New frontend, React/Tauri, Swift UI, Metal renderer, universal2 packaging.
-- Merging/rebasing/publishing upstream PRs, pushing upstream, or changing repository release branches. The user's fork/task-branch push is authorized in Phase 5 only.
+- Merging/rebasing/publishing upstream PRs, pushing upstream, or changing upstream release branches. The user's fork/task-branch push is authorized in Phases 5–6; a new macOS Viewer prerelease tag and release on the fork is authorized in Phase 6.
 - DDS, Python orientation, DDS example parity, firmware updates/calibration changes beyond existing Viewer behavior.
-- Privilege escalation helpers, entitlement bypasses, SIP/AMFI changes, notarization credentials, public release publishing.
+- Privilege escalation helpers, entitlement bypasses, SIP/AMFI changes, notarization credentials, stable/public distribution claims. Phase 6 explicitly permits a labeled app prerelease on the user's fork.
 
 ## Halt surfaces
 
@@ -269,7 +303,7 @@ Requirements:
 - Evidence/branch mapping retained in this plan; current development is the base and old parity stacks are not reintroduced.
 - Three implementation phases satisfy listed requirements with portable verification passing and sol#high review findings addressed.
 - macOS build/GUI/USB and distribution limitations remain visibly pending where not executed.
-- Default builds and public APIs are preserved; no changes to the original master working tree. Remote publication is limited to the user's fork/task branch under Phase 5 authorization.
+- Default builds and public APIs are preserved; no changes to the original master working tree. Remote publication is limited to the user's fork/task branch and the new macOS Viewer prerelease under Phases 5–6 authorization.
 
 ## Execution log
 

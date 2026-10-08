@@ -62,6 +62,10 @@ Installation copies non-system dependencies into `Contents/Frameworks`, rewrites
 
 The package workflow builds native `arm64` and `x86_64` artifacts separately. It checks dependency closure after relocating the app to a path containing spaces and runs the bundled executable with `--version`. This is a loader/CLI smoke test only; it does not test Finder launch, GUI rendering, playback, device discovery, or USB streaming. The workflow does not build a `universal2` app.
 
+## macOS Viewer prereleases
+
+The `kyeshmz/librealsense` fork publishes architecture-specific app ZIPs from new `macos-viewer-v*` tags. Its release workflow calls the package workflow above and publishes only after both native macOS jobs pass their relocation, signature, architecture, and CLI checks. Each prerelease includes separate `arm64` and `x86_64` app bundles, a `SHA256SUMS` file, and a `SOURCE.txt` commit identity. Verify the checksum before using an archive. These are preview builds, not stable SDK releases or universal apps. They are ad-hoc signed, not developer-signed or notarized, and do not qualify Finder launch, playback, or live camera access.
+
 ## Rendering and device-access limits
 
 The macOS Viewer uses Apple's OpenGL 2.1 compatibility context, GLSL 1.20, and fixed-function rendering paths. It does not use the newer shader-accelerated processing path; rendering features and performance can differ from supported Windows and Linux configurations.
