@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "targets": [
+    {
+      "id": "jp4",
+      "jetpack": "4.6.6",
+      "l4t": "32.7.6",
+      "ubuntu": "18.04",
+      "kernel_family": "4.9",
+      "boards": ["Jetson Nano", "Jetson TX1", "Jetson TX2", "Jetson Xavier"],
+      "source_url": "https://developer.nvidia.com/embedded/linux-tegra-r3276",
+      "image": "ubuntu",
+      "image_repository": "library/ubuntu",
+      "image_tag": "18.04",
+      "image_digest": "sha256:f97a5103cca28097326814718e711c9c41b54853c26959d73495e40b1dd608f2"
+    },
+    {
+      "id": "jp5",
+      "jetpack": "5.1.6",
+      "l4t": "35.6.4",
+      "ubuntu": "20.04",
+      "kernel_family": "5.10",
+      "boards": ["Jetson Xavier", "Jetson Orin"],
+      "source_url": "https://developer.nvidia.com/embedded/jetson-linux-r3564",
+      "image": "ubuntu",
+      "image_repository": "library/ubuntu",
+      "image_tag": "20.04",
+      "image_digest": "sha256:722ea796ac2d57eeb3627c58a582fc1acc58be51faf815e1bce1682ae5c092f7"
+    },
+    {
+      "id": "jp6",
+      "jetpack": "6.2.1",
+      "l4t": "36.4.4",
+      "ubuntu": "22.04",
+      "kernel_family": "5.15",
+      "boards": ["Jetson Orin"],
+      "source_url": "https://developer.nvidia.com/embedded/jetson-linux-r3644",
+      "image": "ubuntu",
+      "image_repository": "library/ubuntu",
+      "image_tag": "22.04",
+      "image_digest": "sha256:30dfd7fe96f97c5f5ddf388ce8d098aa509644ad68fdef67244fb71b8169ffcb"
+    },
+    {
+      "id": "jp7",
+      "jetpack": "7.0",
+      "l4t": "38.2.1",
+      "ubuntu": "24.04",
+      "kernel_family": "6.8",
+      "boards": ["Jetson Thor T5000"],
+      "source_url": "https://developer.nvidia.com/embedded/jetpack/downloads/archive-7.0",
+      "image": "ubuntu",
+      "image_repository": "library/ubuntu",
+      "image_tag": "24.04",
+      "image_digest": "sha256:08571ca13e00ca07a2a84eab83a959b4242e22cceb16486a11bef1428c9e93a7"
+    }
+  ]
+}

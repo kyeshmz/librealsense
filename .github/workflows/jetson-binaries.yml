@@ -1,0 +1,132 @@
+name: Jetson SDK binaries
+
+on:
+  push:
+    branches: [jetson-binary-builds]
+    paths:
+      - .github/workflows/jetson-binaries.yml
+      - scripts/jetson/**
+      - doc/installation_jetson.md
+      - doc/jetson_binary_builds.md
+  pull_request:
+    paths:
+      - .github/workflows/jetson-binaries.yml
+      - scripts/jetson/**
+      - doc/installation_jetson.md
+      - doc/jetson_binary_builds.md
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Reference JetPack target
+        type: choice
+        options: [all, jp4, jp5, jp6, jp7]
+        default: all
+        required: true
+      backend:
+        description: USB backend variant
+        type: choice
+        options: [both, rsusb, native]
+        default: both
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jetson-binaries-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Validate metadata and generate matrix
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Validate targets
+        run: python3 scripts/jetson/jetson_ci.py validate
+
+      - name: Run offline regression tests
+        run: python3 -m unittest discover -s scripts/jetson/tests -v
+
+      - name: Verify pinned Ubuntu ARM64 images
+        run: python3 scripts/jetson/jetson_ci.py verify-images
+
+      - name: Generate allowlisted build matrix
+        id: matrix
+        env:
+          JETSON_TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'all' }}
+          JETSON_BACKEND: ${{ github.event_name == 'workflow_dispatch' && inputs.backend || 'both' }}
+        run: |
+          set -euo pipefail
+          matrix="$(python3 scripts/jetson/jetson_ci.py matrix --target "$JETSON_TARGET" --backend "$JETSON_BACKEND")"
+          printf 'matrix=%s\n' "$matrix" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: ${{ matrix.target }} / ${{ matrix.backend }}
+    needs: prepare
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        include: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Build and smoke-test inside pinned ARM64 Ubuntu userland
+        env:
+          JETSON_TARGET: ${{ matrix.target }}
+          JETSON_BACKEND: ${{ matrix.backend }}
+          IMAGE: ${{ matrix.image }}
+          IMAGE_DIGEST: ${{ matrix.image_digest }}
+          UBUNTU_VERSION: ${{ matrix.ubuntu }}
+          SOURCE_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          mkdir -p jetson-logs
+          PULL_LOG="jetson-logs/${JETSON_TARGET}-${JETSON_BACKEND}-${RUN_ID}-${RUN_ATTEMPT}-pull.log"
+          BUILD_LOG="jetson-logs/${JETSON_TARGET}-${JETSON_BACKEND}-${RUN_ID}-${RUN_ATTEMPT}-build.log"
+          : > "$PULL_LOG"
+          : > "$BUILD_LOG"
+          docker pull --platform linux/arm64 "${IMAGE}@${IMAGE_DIGEST}" 2>&1 | tee "$PULL_LOG"
+          docker run --platform linux/arm64 --rm \
+            --volume "$GITHUB_WORKSPACE:/workspace" \
+            --workdir /workspace \
+            --env "JETSON_TARGET=$JETSON_TARGET" \
+            --env "JETSON_BACKEND=$JETSON_BACKEND" \
+            --env "JETSON_EXPECTED_UBUNTU_VERSION=$UBUNTU_VERSION" \
+            --env "JETSON_IMAGE_DIGEST=$IMAGE_DIGEST" \
+            --env JETSON_IMAGE_LAUNCHER=workflow \
+            --env "SOURCE_SHA=$SOURCE_SHA" \
+            "${IMAGE}@${IMAGE_DIGEST}" \
+            bash scripts/jetson/build.sh "$JETSON_TARGET" "$JETSON_BACKEND" \
+            2>&1 | tee "$BUILD_LOG"
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: jetson-logs-${{ matrix.target }}-${{ matrix.backend }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            jetson-logs/${{ matrix.target }}-${{ matrix.backend }}-${{ github.run_id }}-${{ github.run_attempt }}-pull.log
+            jetson-logs/${{ matrix.target }}-${{ matrix.backend }}-${{ github.run_id }}-${{ github.run_attempt }}-build.log
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Upload SDK archive, checksum, and manifest
+        if: success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: jetson-${{ matrix.target }}-${{ matrix.backend }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: jetson-dist/${{ matrix.target }}-${{ matrix.backend }}/*
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0

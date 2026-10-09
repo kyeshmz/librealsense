@@ -2,6 +2,8 @@
 
 **NOTE**: See [support-matrix.md](./support-matrix.md) to learn more about Jetson support for RealSense devices.
 
+For the bounded ARM64 headless SDK archive targets, backend differences, installation procedure, and build status, see [Jetson binary builds](./jetson_binary_builds.md). These archives are not NVIDIA BSP images or kernel modules, and their availability does not establish hardware validation.
+
 > Check out [www.jetsonhacks.com](http://www.jetsonhacks.com/) for great content on everything Jetson! (not affiliated with RealSense)
 
 ## Getting started
