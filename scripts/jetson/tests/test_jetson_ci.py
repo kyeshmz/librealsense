@@ -3,6 +3,7 @@ import hashlib
 import io
 import json
 import re
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -322,6 +323,72 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('sha256', (ROOT / "scripts/jetson/jetson_ci.py").read_text(encoding="utf-8"))
 
 
+class ElfArchitectureValidationTests(unittest.TestCase):
+    def validate_header(self, header, filename="librsutils.a"):
+        build_script = (ROOT / "scripts/jetson/build.sh").read_text(encoding="utf-8")
+        match = re.search(
+            r"(?ms)^validate_arm64_elf_header\(\) \{\n.*?^\}", build_script
+        )
+        self.assertIsNotNone(match, "build script ELF parser function was not found")
+        command = match.group(0) + '\nvalidate_arm64_elf_header "$1" "$2"'
+        return subprocess.run(
+            ["bash", "-c", command, "test", filename, header],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
+        )
+
+    def test_old_readelf_archive_whitespace_and_multiple_members(self):
+        header = """\
+File: librsutils.a(rs_context.o)
+
+ELF Header:
+  Magic:   7f 45 4c 46 02 01 01 00
+  Class:                             ELF64
+  Data:                              2's complement, little endian
+  Type:                              REL (Relocatable file)
+  Machine:                           AArch64
+
+File: librsutils.a(rs_device.o)
+
+ELF Header:
+  Magic:   7f 45 4c 46 02 01 01 00
+  Class:                             ELF64
+  Data:                              2's complement, little endian
+  Type:                              REL (Relocatable file)
+  Machine:                           AArch64   \t
+"""
+        result = self.validate_header(header)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_mixed_architecture_archive_is_rejected(self):
+        header = """\
+File: librsutils.a(rs_context.o)
+ELF Header:
+  Type:                              REL (Relocatable file)
+  Machine:                           AArch64
+File: librsutils.a(x86_helper.o)
+ELF Header:
+  Type:                              REL (Relocatable file)
+  Machine:                           Advanced Micro Devices X86-64
+"""
+        result = self.validate_header(header)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("non-ARM64 ELF object", result.stderr)
+        self.assertIn("Advanced Micro Devices X86-64", result.stderr)
+
+    def test_missing_or_empty_machine_field_is_rejected(self):
+        headers = (
+            "ELF Header:\n  Type: REL (Relocatable file)\n",
+            "ELF Header:\n  Machine:     \n",
+        )
+        for header in headers:
+            with self.subTest(header=header):
+                result = self.validate_header(header)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertRegex(result.stderr, "Machine")
+
+
 class BootstrapAndLocalBuildTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -334,13 +401,42 @@ class BootstrapAndLocalBuildTests(unittest.TestCase):
         self.assertLess(script.index(". /etc/os-release"), script.index("apt-get update"))
         self.assertLess(script.index("JETSON_IMAGE_DIGEST"), script.index("apt-get update"))
         self.assertLess(script.index("apt-get install"), script.index('python3 "$CI_TOOL" preflight'))
-        self.assertLess(script.index('python3 "$CI_TOOL" preflight'), script.index('git -c safe.directory'))
+        self.assertLess(
+            script.index('python3 "$CI_TOOL" preflight'),
+            script.index('git config --global --replace-all safe.directory "$REPO_ROOT"'),
+        )
         start = script.index("APT_PACKAGES=(")
         packages = script[start:script.index(")", start)]
         self.assertIn("python3", packages)
         self.assertIn("ca-certificates", packages)
         self.assertIn("git", packages)
         self.assertIn("--expected-image-digest", script)
+
+    def test_build_git_trust_is_exact_scoped_and_precedes_source_git_checks(self):
+        script = (ROOT / "scripts/jetson/build.sh").read_text(encoding="utf-8")
+        install = script.index("apt-get install")
+        preflight = script.index('python3 "$CI_TOOL" preflight')
+        digest_check = script.index('[[ "$IMAGE_DIGEST" == "$JETSON_IMAGE_DIGEST" ]]')
+        architecture_check = script.index(
+            '[[ "$ARCHITECTURE" == "arm64" ]] ||', preflight
+        )
+        trust = script.index(
+            'git config --global --replace-all safe.directory "$REPO_ROOT"'
+        )
+        head = script.index('git -C "$REPO_ROOT" rev-parse HEAD')
+        status = script.index(
+            'git -C "$REPO_ROOT" status --porcelain --untracked-files=all'
+        )
+
+        self.assertLess(install, preflight)
+        self.assertLess(preflight, digest_check)
+        self.assertLess(digest_check, architecture_check)
+        self.assertLess(architecture_check, trust)
+        self.assertLess(trust, head)
+        self.assertLess(head, status)
+        self.assertEqual(script.count("git config --global"), 1)
+        self.assertNotIn('safe.directory "*"', script)
+        self.assertNotIn("git -c safe.directory", script)
 
     def test_preflight_requires_exact_configured_launcher_identity(self):
         target = self.targets["jp6"]

@@ -21,6 +21,36 @@ case "$BACKEND" in
     *) echo "unknown backend: $BACKEND" >&2; exit 2 ;;
 esac
 
+validate_arm64_elf_header() {
+    local file="$1"
+    local header="$2"
+    local machine
+    local machine_count=0
+
+    while IFS= read -r machine; do
+        machine_count=$((machine_count + 1))
+        [[ -n "$machine" ]] || {
+            echo "missing ELF Machine value in $file" >&2
+            return 1
+        }
+        [[ "$machine" == "AArch64" ]] || {
+            echo "non-ARM64 ELF object found: $file ($machine)" >&2
+            return 1
+        }
+    done < <(sed -n '
+        /^[[:space:]]*Machine:/ {
+            s/^[[:space:]]*Machine:[[:space:]]*//
+            s/[[:space:]]*$//
+            p
+        }
+    ' <<< "$header")
+
+    [[ "$machine_count" -gt 0 ]] || {
+        echo "ELF header for $file is missing a Machine field" >&2
+        return 1
+    }
+}
+
 MACHINE="$(uname -m)"
 [[ "$MACHINE" == "aarch64" || "$MACHINE" == "arm64" ]] || {
     echo "build requires native ARM64, found machine $MACHINE" >&2
@@ -105,8 +135,13 @@ read -r IMAGE_DIGEST UBUNTU_VERSION ARCHITECTURE < <(
 }
 [[ "$ARCHITECTURE" == "arm64" ]] || { echo "build requires native ARM64 dpkg architecture" >&2; exit 1; }
 
+# Git's older Ubuntu security backports may ignore command-scoped safe.directory.
+# This runs only in the verified ephemeral build container, and trusts only this
+# exact source checkout (never a wildcard or the host's Git configuration).
+git config --global --replace-all safe.directory "$REPO_ROOT"
+
 SOURCE_SHA="${SOURCE_SHA:-}"
-GIT_HEAD="$(git -c safe.directory="$REPO_ROOT" -C "$REPO_ROOT" rev-parse HEAD)"
+GIT_HEAD="$(git -C "$REPO_ROOT" rev-parse HEAD)"
 if [[ -z "$SOURCE_SHA" ]]; then
     SOURCE_SHA="$GIT_HEAD"
 fi
@@ -114,7 +149,7 @@ fi
     echo "SOURCE_SHA must match the checked-out lowercase Git SHA" >&2
     exit 1
 }
-WORKTREE_STATUS="$(git -c safe.directory="$REPO_ROOT" -C "$REPO_ROOT" status --porcelain --untracked-files=all -- . ':!jetson-logs' ':!jetson-dist')"
+WORKTREE_STATUS="$(git -C "$REPO_ROOT" status --porcelain --untracked-files=all -- . ':!jetson-logs' ':!jetson-dist')"
 [[ -z "$WORKTREE_STATUS" ]] || {
     echo "build requires a clean source checkout (excluding workflow diagnostic logs)" >&2
     exit 1
@@ -201,7 +236,7 @@ JSON_SOURCE="$BUILD_DIR/third-party/json"
     echo "CMake did not leave the fetched nlohmann/json git checkout at $JSON_SOURCE" >&2
     exit 1
 }
-FETCHED_JSON_COMMIT="$(git -c safe.directory="$JSON_SOURCE" -C "$JSON_SOURCE" rev-parse HEAD)"
+FETCHED_JSON_COMMIT="$(git -C "$JSON_SOURCE" rev-parse HEAD)"
 [[ "$FETCHED_JSON_COMMIT" =~ ^[0-9a-f]{40,64}$ ]] || {
     echo "could not resolve fetched nlohmann/json commit" >&2
     exit 1
@@ -242,16 +277,14 @@ ENUMERATOR="$PAYLOAD/bin/rs-enumerate-devices"
 ELF_COUNT=0
 DYNAMIC_ELF_COUNT=0
 while IFS= read -r -d '' file; do
-    header="$(readelf -h "$file" 2>/dev/null || true)"
-    [[ "$header" == *"Machine:"* ]] || continue
-    machines="$(awk -F: '/Machine:/ {gsub(/^[[:space:]]+/, "", $2); print $2}' <<< "$header")"
-    [[ -n "$machines" ]] || continue
-    while IFS= read -r machine; do
-        [[ "$machine" == "AArch64" ]] || {
-            echo "non-ARM64 ELF object found: $file ($machine)" >&2
-            exit 1
-        }
-    done <<< "$machines"
+    readelf_status=0
+    header="$(readelf -h "$file" 2>/dev/null)" || readelf_status=$?
+    [[ "$header" == *"ELF Header:"* ]] || continue
+    if [[ "$readelf_status" -ne 0 ]]; then
+        echo "readelf failed while inspecting ELF object: $file" >&2
+        exit 1
+    fi
+    validate_arm64_elf_header "$file" "$header" || exit 1
     ELF_COUNT=$((ELF_COUNT + 1))
     if grep -Eq 'Type:[[:space:]]+(DYN|EXEC)([[:space:]]|$)' <<< "$header"; then
         DYNAMIC_ELF_COUNT=$((DYNAMIC_ELF_COUNT + 1))
@@ -294,7 +327,7 @@ python3 "$CI_TOOL" write-manifest \
 
 mkdir -p -- "$WORK_DIR/package"
 cp -a "$STAGE_DIR/usr" "$WORK_DIR/package/"
-SOURCE_DATE_EPOCH="$(git -c safe.directory="$REPO_ROOT" -C "$REPO_ROOT" show -s --format=%ct "$SOURCE_SHA" 2>/dev/null || true)"
+SOURCE_DATE_EPOCH="$(git -C "$REPO_ROOT" show -s --format=%ct "$SOURCE_SHA" 2>/dev/null || true)"
 if [[ ! "$SOURCE_DATE_EPOCH" =~ ^[0-9]+$ ]]; then
     SOURCE_DATE_EPOCH=0
 fi
