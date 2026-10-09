@@ -1,6 +1,6 @@
 # Jetson ARM64 binary builds
 
-This page describes the bounded reference targets for the fork's headless ARM64 SDK archives. It does not certify every Jetson with a matching kernel family. No successful Actions build or physical-device streaming result is claimed here; check the fork's Actions run and test hardware separately.
+This page describes the bounded reference targets for the fork's headless ARM64 SDK archives. It does not certify every Jetson with a matching kernel family. The prior build-only run [37878831323](https://github.com/kyeshmz/librealsense/actions/runs/37878831323) passed the prepare job and all eight ARM64 build combinations for source `baff3e590444f01ed99dd95729c616eca83d2965`. That run predates the release-publishing workflow: no test release has yet been published or downloaded end to end. Physical-device streaming and native module ABI validation also remain unverified.
 
 ## Reference images and kernels
 
@@ -19,7 +19,7 @@ The build container uses a digest-pinned ARM64 Ubuntu **userland** for compilati
 
 The workflow configures `BUILD_EXAMPLES=OFF` and `BUILD_TOOLS=ON`, and produces separate `RSUSB` and native-backend SDK archives with SDK libraries, headers, and CLI tools only. `rs-enumerate-devices` is included. These archives contain no examples (including `realsense-viewer`), Python bindings, CUDA, DDS/ROS2 recording or ROSBAG2, or kernel modules. Do not combine the two backend archives in one installation: they provide mutually exclusive backend configurations under the same SDK/library names.
 
-An artifact contains one archive, one checksum sidecar, and one JSON manifest. The build writes them under `jetson-dist/TARGET-BACKEND/` with these names (the 12-character SHA prefix comes from the source revision):
+Each temporary Actions build artifact contains one archive, one checksum sidecar, and one JSON manifest. The build writes them under `jetson-dist/TARGET-BACKEND/` with these names (the 12-character SHA prefix comes from the source revision):
 
 ```text
 librealsense-jetson-TARGET-BACKEND-SOURCE_SHA12.tar.gz
@@ -27,14 +27,14 @@ librealsense-jetson-TARGET-BACKEND-SOURCE_SHA12.tar.gz.sha256
 librealsense-jetson-TARGET-BACKEND-SOURCE_SHA12.json
 ```
 
-The archive is rooted at `usr/local/` and embeds the same manifest at `usr/local/share/doc/librealsense2/jetson-build-manifest.json`. Manifest schema version 1 records `target.id`, `backend`, source SHA, toolchain and dependency versions, plus `container_image.launcher_selection` and `container_image.in_container_observation`. The configured ARM64 digest is recorded as launcher-verified selection; the container separately records observed Linux/Ubuntu/architecture and explicitly does **not** claim to observe its own image digest or the target Jetson BSP/kernel. Resolved dependency versions do not lock apt repositories or guarantee a bit-for-bit or fully reproducible rebuild. Artifacts are temporary GitHub Actions artifacts, not Debian packages, releases, or an apt repository, and expire according to the fork's retention settings.
+The archive is rooted at `usr/local/` and embeds the same manifest at `usr/local/share/doc/librealsense2/jetson-build-manifest.json`. Manifest schema version 1 records `target.id`, `backend`, source SHA, toolchain and dependency versions, plus `container_image.launcher_selection` and `container_image.in_container_observation`. The configured ARM64 digest is recorded as launcher-verified selection; the container separately records observed Linux/Ubuntu/architecture and explicitly does **not** claim to observe its own image digest or the target Jetson BSP/kernel. Resolved dependency versions do not lock apt repositories or guarantee a bit-for-bit or fully reproducible rebuild. Actions artifacts are temporary build-to-release handoff files, not Debian packages or an apt repository, and expire according to the fork's retention settings.
 
 ## Enable and run the workflow on a fork
 
-1. Use a public fork and have a fork maintainer enable GitHub Actions for it (the fork's **Actions** tab may require an explicit enable/approval step). Keep workflow permissions read-only; do not add secrets for these builds.
+1. Use a public fork and have a fork maintainer enable GitHub Actions for it (the fork's **Actions** tab may require an explicit enable/approval step). Build jobs remain read-only; the gated release job uses only its automatically scoped `GITHUB_TOKEN`. Do not add stored credentials.
 2. The isolated workflow uses the public GitHub-hosted ARM64 runner label `ubuntu-24.04-arm`, then runs the build container with `--platform linux/arm64`. Runner availability or quota is controlled by GitHub and the repository/account; a configured workflow is not evidence that a run started or passed.
-3. The workflow has a branch-scoped, path-limited push trigger and a path-limited pull-request trigger for the Jetson workflow, tooling, and documentation. The intended working branch is `jetson-binary-builds`; confirm the actual `on:` filters in `.github/workflows/jetson-binaries.yml` before relying on a push trigger. A push to another branch or unrelated paths may not trigger it.
-4. GitHub generally offers `workflow_dispatch` only when that workflow file is present on the repository's default branch. The current `jetson-binary-builds` branch is built through its push trigger; this work does not change the default branch, so do not assume manual dispatch will be available for it. If the workflow is available for manual dispatch, select the target/backend controls shown by GitHub. Inputs are validated against the allowlist; the offline matrix interface supports `jp4`, `jp5`, `jp6`, `jp7` or `all`, and `rsusb`, `native` or `both`.
+3. The workflow uses path-limited push triggers on `jetson-binary-builds` and `master`, and a path-limited pull-request trigger for the Jetson workflow, tooling, and documentation. A push to another branch or unrelated paths may not trigger a build. A `jetson-v*` tag push runs the full eight-target/backend matrix; tag pushes are not limited by the branch path filter.
+4. GitHub generally offers `workflow_dispatch` only when that workflow file is present on the repository's default branch. Before the coordinator merges the reviewed workflow into `master`, the `jetson-binary-builds` branch is built through its push trigger and should not be assumed to support manual dispatch. If the workflow is available for manual dispatch, select the target/backend controls shown by GitHub. Inputs are validated against the allowlist; the offline matrix interface supports `jp4`, `jp5`, `jp6`, `jp7` or `all`, and `rsusb`, `native` or `both`.
 5. Wait for the run to finish. Download its artifact from the run page, or authenticate GitHub CLI and download by that run's ID:
 
    ```sh
@@ -45,7 +45,55 @@ The archive is rooted at `usr/local/` and embeds the same manifest at `usr/local
    gh run download "$RUN_ID" --repo "$REPO" --dir ./jetson-artifacts
    ```
 
-    The downloaded files are only available for the configured retention period. The workflow checks ARM64 ELF objects and dependencies, runs the installed enumerator's help command, and exercises relocated SDK consumers using both CMake and pkg-config. It also normalizes the staged pkg-config library path for ARM64. These are build-time checks, not evidence that a workflow passed or that a camera streams on a Jetson. Each matrix job uploads separate pull/build logs even when the build fails; SDK artifacts upload only after a successful build.
+    The downloaded files are only available for the configured retention period. The workflow checks ARM64 ELF objects and dependencies, runs the installed enumerator's help command, and exercises relocated SDK consumers using both CMake and pkg-config. It also normalizes the staged pkg-config library path for ARM64. These checks do not on their own show that a workflow passed or that a camera streams on a Jetson; the previously observed build-only run is identified above. Each matrix job uploads separate pull/build logs even when the build fails; SDK artifacts upload only after a successful build.
+
+## Test prereleases and persistent release assets
+
+On a push of a tag matching `jetson-v*`, the workflow first completes the full eight-combination build matrix. A separate release job runs only for tag pushes in `kyeshmz/librealsense` and only after every build succeeds. It downloads artifacts matching `jetson-jp*` into one directory; build logs are excluded. All build jobs retain read-only permissions. Only the gated release job gets `contents: write`, and it reads `GITHUB_TOKEN` from the Actions environment without storing a personal token.
+
+The publisher accepts only tags of the form `jetson-vMAJOR.MINOR.PATCH-ci.N`, where the SDK version must exactly match the three `RS2_API_*_VERSION` macros in `rs.h`; `N` is a positive integer. For the current SDK version, `jetson-v2.58.4-ci.1` is an example. The tag must already exist remotely and resolve to the build's exact source SHA. It is not created or retargeted by the publisher. Before any API write, `release.py prepare` validates the exact eight target/backend archives, their checksum and JSON sidecars, the embedded manifests, matching source SHA, image/backend metadata, archive safety, and the complete matrix. It creates deterministic `release-index.json` and `SHA256SUMS` files. The final release has 26 uploaded assets: eight archives, eight per-archive checksum sidecars, eight JSON manifests, the index, and the consolidated sums file. GitHub's automatic source archives are not SDK assets.
+
+Publishing is draft-first: the script creates a draft prerelease marked not-latest, uploads and checks the name, size, and SHA-256 digest of every asset, re-reads the draft to validate the complete asset set, and only then publishes it as a prerelease. A failed upload leaves the release as a draft, not a partial public release. Existing releases are never overwritten: a fully matching published release is accepted idempotently; conflicts fail closed. A complete matching draft may be finalized on retry, while an incomplete draft is left untouched. A sanitized publisher log is uploaded separately as a temporary Actions artifact, including on release-job failure; it is never part of the release assets. The release job is host-side and does not run Node actions inside the Bionic build container.
+
+The workflow publisher commands are discoverable locally with:
+
+```sh
+python3 scripts/jetson/release.py --help
+python3 scripts/jetson/release.py prepare --help
+python3 scripts/jetson/release.py publish --help
+```
+
+GitHub requires workflow-write authorization to create a release for a commit that changes workflow files relative to the default branch, and `GITHUB_TOKEN` cannot receive that permission. The workflow must therefore be merged into the fork's `master` before its first tag-triggered release. The publisher sends the exact source SHA as `target_commitish` and independently checks the existing remote tag; it does not use a misleading default-branch target.
+
+After a test prerelease is published, download all release assets and verify the consolidated checksums:
+
+```sh
+TAG=jetson-v2.58.4-ci.1
+DOWNLOAD_DIR="$PWD/jetson-release-download"
+mkdir -p -- "$DOWNLOAD_DIR"
+gh release download "$TAG" --repo kyeshmz/librealsense --dir "$DOWNLOAD_DIR"
+(
+  cd -- "$DOWNLOAD_DIR"
+  sha256sum --check SHA256SUMS
+)
+```
+
+Then check every downloaded archive's per-package checksum, embedded manifest, and tar-path safety against the selected target/backend. Run this from a trusted librealsense checkout:
+
+```sh
+set -euo pipefail
+for TARGET in jp4 jp5 jp6 jp7; do
+  for BACKEND in rsusb native; do
+    ARCHIVES=("$DOWNLOAD_DIR"/librealsense-jetson-"$TARGET"-"$BACKEND"-*.tar.gz)
+    test "${#ARCHIVES[@]}" -eq 1
+    python3 scripts/jetson/jetson_ci.py verify-archive \
+      --archive "${ARCHIVES[0]}" --checksum "${ARCHIVES[0]}.sha256" \
+      --target "$TARGET" --backend "$BACKEND"
+  done
+done
+```
+
+The command sequence describes the release download check; it is not evidence that a test prerelease has already run. Confirm the tag workflow and its 26 release assets in the fork before relying on a release download. The release remains headless and CPU-only: no CUDA, kernel modules, or hardware streaming tests are supplied or claimed.
 
 ## Local preflight and optional Docker build
 
@@ -143,4 +191,4 @@ Reconnect the camera and test according to the device's normal operating procedu
 - **Native** uses the Linux kernel UVC/IIO interfaces and may be preferable for production requirements, but the SDK archive does not supply or install patched kernel modules. Native operation depends on matching patches/modules to the exact board configuration, kernel sources, `Module.symvers`, vermagic, and signing policy. Verify those on the board before use; a matching major kernel family is not enough.
 - The existing `scripts/patch-realsense-ubuntu-L4T.sh` is a separate, board-side procedure, not a CI step and not a universal installer for these binary targets. For example, it has a case for L4T 32.7.1 but not the JP4 reference L4T 32.7.6. Do not infer JP4.6.6 native patch support from the binary target table. Check that script's exact supported-release cases and follow its precautions before considering any patching; this binary workflow never inserts modules or changes a kernel.
 
-CI build checks and physical-device tests are separate. Image digest checks, compilation, ELF/dependency checks, and smoke checks do not demonstrate that either backend streams from a camera. No successful Actions run or hardware validation is asserted by this document.
+CI build checks and physical-device tests are separate. Image digest checks, compilation, ELF/dependency checks, and smoke checks do not demonstrate that either backend streams from a camera. The successful Actions evidence above is for the build-only workflow; no release-publishing run or physical hardware validation is asserted by this document.

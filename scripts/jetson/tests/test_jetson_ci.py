@@ -275,7 +275,8 @@ class ManifestAndChecksumTests(unittest.TestCase):
 class WorkflowContractTests(unittest.TestCase):
     def test_workflow_is_isolated_read_only_pinned_and_arm64(self):
         workflow = (ROOT / ".github/workflows/jetson-binaries.yml").read_text(encoding="utf-8")
-        self.assertIn("branches: [jetson-binary-builds]", workflow)
+        self.assertIn("branches: [jetson-binary-builds, master]", workflow)
+        self.assertIn('tags: ["jetson-v*"]', workflow)
         for path in (
             ".github/workflows/jetson-binaries.yml",
             "scripts/jetson/**",
@@ -299,10 +300,27 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("JETSON_TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'all' }}", workflow)
         self.assertIn("JETSON_BACKEND: ${{ github.event_name == 'workflow_dispatch' && inputs.backend || 'both' }}", workflow)
         self.assertNotIn("--privileged", workflow)
-        self.assertNotRegex(workflow, r"permissions:\s*\n\s+\w+:\s+write")
+        self.assertIn("permissions:\n  contents: read", workflow)
+        self.assertEqual(len(re.findall(r"(?m)^      contents: write$", workflow)), 1)
         action_refs = re.findall(r"uses:\s+[^@\s]+@([0-9a-f]+)", workflow)
-        self.assertEqual(len(action_refs), 4)
+        self.assertEqual(len(action_refs), 7)
         self.assertTrue(all(len(ref) == 40 for ref in action_refs))
+
+        release_job = workflow.split("\n  release:\n", 1)[1]
+        self.assertIn("needs: [prepare, build]", release_job)
+        self.assertIn(
+            "if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/jetson-v') "
+            "&& github.repository == 'kyeshmz/librealsense'",
+            release_job,
+        )
+        self.assertIn("pattern: jetson-jp*", release_job)
+        self.assertIn("merge-multiple: true", release_job)
+        self.assertIn("d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0", release_job)
+        self.assertIn("GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}", release_job)
+        self.assertIn("2>&1 | tee -a \"$RELEASE_LOG\"", release_job)
+        self.assertIn("set -euo pipefail", release_job)
+        self.assertIn("name: jetson-release-log-${{ github.run_id }}-${{ github.run_attempt }}", release_job)
+        self.assertIn("path: jetson-release-logs/release-${{ github.run_id }}-${{ github.run_attempt }}.log", release_job)
 
     def test_build_script_is_tools_only_and_cmake_310_compatible(self):
         build_script = (ROOT / "scripts/jetson/build.sh").read_text(encoding="utf-8")

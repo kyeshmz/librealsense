@@ -2,7 +2,8 @@ name: Jetson SDK binaries
 
 on:
   push:
-    branches: [jetson-binary-builds]
+    branches: [jetson-binary-builds, master]
+    tags: ["jetson-v*"]
     paths:
       - .github/workflows/jetson-binaries.yml
       - scripts/jetson/**
@@ -127,6 +128,70 @@ jobs:
         with:
           name: jetson-${{ matrix.target }}-${{ matrix.backend }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: jetson-dist/${{ matrix.target }}-${{ matrix.backend }}/*
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+  release:
+    name: Publish verified Jetson SDK prerelease
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/jetson-v') && github.repository == 'kyeshmz/librealsense'
+    needs: [prepare, build]
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Initialize sanitized release diagnostics
+        run: |
+          set -euo pipefail
+          mkdir -p jetson-release-logs
+          : > "jetson-release-logs/release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.log"
+
+      - name: Download only the eight SDK build artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: jetson-jp*
+          path: jetson-release-assets
+          merge-multiple: true
+
+      - name: Verify complete matrix and prepare release assets
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          SOURCE_SHA: ${{ github.sha }}
+          RELEASE_LOG: jetson-release-logs/release-${{ github.run_id }}-${{ github.run_attempt }}.log
+        run: |
+          set -euo pipefail
+          mkdir -p jetson-release-logs
+          : > "$RELEASE_LOG"
+          python3 scripts/jetson/release.py prepare \
+            --assets-dir jetson-release-assets \
+            --tag "$RELEASE_TAG" \
+            --source-sha "$SOURCE_SHA" 2>&1 | tee -a "$RELEASE_LOG"
+
+      - name: Publish verified prerelease
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          SOURCE_SHA: ${{ github.sha }}
+          RELEASE_LOG: jetson-release-logs/release-${{ github.run_id }}-${{ github.run_attempt }}.log
+        run: |
+          set -euo pipefail
+          python3 scripts/jetson/release.py publish \
+            --assets-dir jetson-release-assets \
+            --tag "$RELEASE_TAG" \
+            --source-sha "$SOURCE_SHA" 2>&1 | tee -a "$RELEASE_LOG"
+
+      - name: Upload sanitized release diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: jetson-release-log-${{ github.run_id }}-${{ github.run_attempt }}
+          path: jetson-release-logs/release-${{ github.run_id }}-${{ github.run_attempt }}.log
           if-no-files-found: error
           retention-days: 30
           compression-level: 0

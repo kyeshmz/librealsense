@@ -4,7 +4,7 @@
 Build downloadable ARM64 librealsense SDK binaries with GitHub Actions in a public fork, validate target images against JetPack/L4T kernel families, and iterate Luna max implementation with Sol review.
 
 ## Conventions in force
-- All work is on branch `jetson-binary-builds`; do not modify upstream or the existing macOS branch.
+- Implement on branch `jetson-binary-builds`; do not modify upstream or the existing macOS branch. Phase7 explicitly authorizes the coordinator to fast-forward this reviewed branch into the user's fork master, then push a Jetson test prerelease tag.
 - Add an isolated workflow and scripts; preserve upstream workflows and kernel patch scripts.
 - Use Python standard library and unittest for tooling; no dependency required for local tests.
 - Bash scripts use `set -euo pipefail`, quote paths, fail closed on unknown targets and invalid architectures.
@@ -14,7 +14,7 @@ Build downloadable ARM64 librealsense SDK binaries with GitHub Actions in a publ
 - Package both RSUSB and native variants separately; CUDA, graphical examples, Python bindings and ROSBAG2 are disabled and explicitly documented.
 - Portable ARM64 baseline: no host-specific `-march=native` or host-only optimizations.
 - Never mark manual verification complete or claim CI passed without observing a successful run.
-- Implementation phases 1/2/4/5 do not commit or push; the coordinator owns plan text. Phase6 explicitly authorizes Luna to commit the scoped publication audit, push the existing branch, and create or reuse a draft PR in the user's fork.
+- Implementation phases 1/2/4/5/7 do not commit or push; the coordinator owns plan text and Phase7 merge/tag publication. Phase6 explicitly authorizes Luna to commit the scoped publication audit, push the existing branch, and create or reuse a draft PR in the user's fork.
 
 ## Evidence
 - Upstream commit `e15c5d6bb` on master matches public fork `kyeshmz/librealsense/master` as inspected 2026-10-08. Fork creation through MCP returned 403, but existing public fork and SSH authentication are available.
@@ -186,9 +186,49 @@ Publish the reviewed Jetson branch to the user's fork and create or reuse a draf
 #### Manual verification
 - [ ] Maintainer reviews and merges draft PR when ready.
 
+## Phase 7
+### Outcome
+Publish verified SDK archive packages as GitHub Release assets through tag-triggered CI and prove the release downloads work end to end.
+
+### Files
+- [MODIFY] `.github/workflows/jetson-binaries.yml`
+- [NEW] `scripts/jetson/release.py`
+- [NEW] `scripts/jetson/tests/test_release.py`
+- [MODIFY] `scripts/jetson/tests/test_jetson_ci.py` (only workflow assertions affected by adding master/tag/release job)
+- [MODIFY] `doc/jetson_binary_builds.md`
+
+### Requirements
+- User explicitly approved merging reviewed release publishing into `kyeshmz/librealsense:master` and testing releases. Upstream and macOS branch remain untouched; implementation remains on existing feature branch. Coordinator merges/pushes/tags only after Sol review. Fork/master currently e15c5d6bb, ancestor of feature branch; refuse force pushes or discarding concurrent work.
+- Add master to branch triggers and `jetson-v*` tag push trigger. Tags run full eight-target/backend matrix. Add release job gated strictly on tag push and repository `kyeshmz/librealsense`, dependent on all build jobs succeeding. Only release job grants `contents: write`; all builds remain read-only. No publish on PR, branch push or arbitrary manual dispatch.
+- Use verified SHA-pinned actions/download-artifact on host to fetch only SDK artifacts matching `jetson-jp*`, not logs, into one merge directory. No Node Actions inside Bionic. Use standard-library release tooling, no new dependencies or stored personal tokens.
+- `release.py` has offline `prepare` and authenticated `publish` commands with explicit asset directory, tag and source SHA. Extract SDK version from rs.h macros (currently2.58.4); reject malformed tag or base-version mismatch. Test tag `jetson-v2.58.4-ci.1` (choose a fresh numeric suffix if it already exists); releases are prereleases and never latest.
+- Require exactly eight target/backend archives and their eight checksum/eight JSON sidecars, no missing/extra/unexpected/symlink files, same source SHA, target images/backend metadata and embedded/sidecar equality. Reuse `jetson_ci.verify_archive` for checksums/tar/manifest safety. Fail before any API write on mismatch or incomplete matrix.
+- Prepare a deterministic `release-index.json` listing tag/source/SDK version and all eight packages with metadata/digests, plus consolidated `SHA256SUMS` covering24 package files and the index. Final release has26 assets total:8 tarballs,8 checksum sidecars,8 JSON manifests,index,SHA256SUMS. Do not upload logs/build trees or automatic GitHub source archives as SDK packages.
+- Publish using GITHUB_TOKEN from the release job, trusted API/upload HTTPS endpoints only, no secret logging. Validate existing remote tag resolves to exact source SHA; do not auto-create a tag from a different commit or default branch. Create a draft prerelease, upload all26 verified assets and check response names/sizes/digests, then publish only after complete validation. Do not overwrite/delete existing public releases/assets; either verify a fully matching existing release as idempotent success or fail explicitly. Failed publication must not expose partial public release.
+- Capture sanitized publisher output in a dedicated release log, preserve failure status with pipefail, and upload it on always() as a separate Actions log artifact (never a Release asset). This enables diagnosis through public artifacts when API log-download permissions are unavailable.
+- GitHub current docs impose Workflows-write for create/update releases whose target changes workflow files relative to default branch; automatic GITHUB_TOKEN cannot obtain it. Coordinator must first merge reviewed workflow into fork default master; do not bypass this rule using a misleading target_commitish or token workaround. Publish target_commitish is exact tagged source SHA.
+- Docs distinguish temporary Actions artifacts from persistent GitHub Release assets, show safe tag/asset download/checksum+archive verification route, and state CPU/headless/no kernel-module/hardware-test limits. Keep installation guide compatible and commands exact.
+- Add tests for full/missing/duplicate/wrong-source/tag/version/manifest/hash packages, 26-asset index/checksums, API creation/upload/finalization ordering and failed upload staying draft, permission/error handling and token redaction, existing-release no-overwrite, and workflow tag gate/job-scoped permissions. Keep Python3.6 compatibility unless a documented host-only reason is necessary; existing helpers invoked in Bionic must remain unchanged.
+
+#### Automated verification
+- [x] `python3 -m unittest discover -s scripts/jetson/tests -v`
+- [x] `PYTHONHOME=/tmp/opencode/jetson-tools/python36/root/usr LD_LIBRARY_PATH=/tmp/opencode/jetson-tools/python36/root/usr/lib/x86_64-linux-gnu /tmp/opencode/jetson-tools/python36/root/usr/bin/python3.6 -m unittest discover -s scripts/jetson/tests -v`
+- [x] `/tmp/opencode/jetson-tools/actionlint -shellcheck /tmp/opencode/jetson-tools/shellcheck-root/usr/bin/shellcheck .github/workflows/jetson-binaries.yml`
+- [x] `/tmp/opencode/jetson-tools/shellcheck-root/usr/bin/shellcheck scripts/jetson/build.sh scripts/jetson/check-device.sh`
+- [x] `git diff --check`
+
+#### Coordinator end-to-end gate
+- [x] Sol review resolves critical/high/medium findings.
+- [ ] Reviewed branch merged into fork master with no force/upstream changes, fresh test tag pushed.
+- [ ] Tag workflow builds all8 SDK archives and release job succeeds.
+- [ ] Public prerelease contains26 expected assets; all8 downloaded archive packages pass independent checksum/source/image/ARM64/tar-safety verification.
+
+#### Manual verification
+- [ ] Physical Jetson streaming still needs hardware and remains unverified.
+
 ## Out of scope
 - CUDA, GPU/graphics, Python wheels, ROSBAG2, precompiled kernel modules, kernel flashing/insertion, hardware streaming validation, changing upstream general CI or existing macOS work.
-- Pull request to upstream; publishing a new release or apt repository; setting repository/account settings.
+- Pull request to upstream; non-Jetson releases or apt repository; setting repository/account settings. Phase7 authorizes only the user's fork Jetson test prerelease and reviewed master merge.
 
 ## Halt surfaces
 - Verified upstream API/toolchain incompatibility requiring changes outside owned files: report and stop for coordinator plan amendment.
@@ -232,3 +272,6 @@ Publish the reviewed Jetson branch to the user's fork and create or reuse a draf
 - 2026-10-08: Phase 5 fixed readelf field normalization by trimming each `Machine:` value with POSIX `sed`, validating every machine header (including archive members), and failing closed for missing/empty fields or a nonzero readelf result with ELF output. Added regressions that execute the production shell parser against old-readelf whitespace, multiple archive members, mixed architectures, and malformed fields. Git now receives one exact `safe.directory` entry for `REPO_ROOT` in the verified ephemeral container after apt/preflight and before HEAD/status; dirty-tree and source-SHA checks remain intact. All 32 tests passed on local Python and Bionic Python 3.6; shellcheck, actionlint and `git diff --check` passed. No follow-up ARM64 CI run or hardware verification was performed; run 37877580713 remains the observed partial success (jp6/jp7 only), not an all-target pass.
 - 2026-10-08: Phase 6 local checks: `python3 -m unittest discover -s scripts/jetson/tests -q` reports 32 tests passed; `git diff --check` passes. GitHub search found no open PR matching head `kyeshmz:jetson-binary-builds` and base `master` in `kyeshmz/librealsense`.
 - 2026-10-08: Phase 6 pushed the scoped plan-only audit commit `c727066a736b570daacd8280888210cb158d4e2a` normally to the existing fork branch; `git ls-remote fork refs/heads/jetson-binary-builds` matched `git rev-parse HEAD`. GitHub MCP `create_pull_request` for a draft PR in `kyeshmz/librealsense` returned `failed to create pull request: POST https://api.github.com/repos/kyeshmz/librealsense/pulls: 403 Resource not accessible by personal access token []`; no PR was created.
+- 2026-10-09: User requests test packages with GitHub Releases and explicitly approves reviewed merge into our fork master, then actual test prerelease publication. Current build CI rechecked: run37878831323 all9jobs success; code unchanged except plan audits since compiledbaff3e590. Current primary REST docs https://docs.github.com/en/rest/releases/releases#create-a-release state automatic GITHUB_TOKEN cannot create/update releases whose target changes workflows relative to default; merge before tag is required, no target_commitish workaround. Actions docs confirm tag pushes ignore paths filters and individual jobs can grant contents write. SDK macros currently2.58.4; no remote jetson-v tags existed at inspection. Added Phase7; Luna implements, Sol reviews, coordinator merges/tags and verifies actual release downloads.
+- 2026-10-09: Phase 7 implementation added the master/tag workflow triggers, read-only eight-build matrix, fork-only write-scoped draft-first release job, and separate always-uploaded sanitized release log. `actions/download-artifact` v4.3.0 is pinned to upstream tag commit `d3f86a106a0bac45b974a628896c90dbdf5c8093`. `release.py` validates the exact eight archive/checksum/manifest sets against `jetson_ci.verify_archive`, SDK version/tag and source SHA, writes a deterministic 26-asset bundle, and publishes only after checking the existing tag, release state, and uploaded asset digests. Mocked API tests cover ordering, failures, permissions, token redaction, tag mismatch, and existing-release behavior. All five Phase 7 offline verification commands passed; 51 tests passed under both host Python and Bionic Python 3.6.9. The prepare command also accepted the prior eight verified packages from run37878831323 in a temporary copy and produced all26 release assets without modifying the source artifacts. No release API writes, tags, pushes, merge, or actual release downloads were performed; those remain coordinator gates after Sol review.
+- 2026-10-09: Sol independently approved Phase7 code with no critical/high/medium findings, reran51tests on both Python versions and actionlint/diff checks, verified download-action SHA, and tested incomplete-draft/wrong-upload-digest failures cannot publish. Coordinator independently reran51tests on both versions/actionlint/diff and prepared26realassets with all25consolidatedchecksums matching. Reviewed code authorized for fork/master fast-forward and fresh Jetson test tag; actual publication/download gates remain open.
